@@ -68,7 +68,7 @@ func LoadConfig() error {
 		return err
 	}
 	if config.WebhookMsg == "" {
-		config.WebhookMsg = "{{if .POTW}}<@1106304624958394368>{{else}}<@1106147993071140865>{{end}} - Problema {{if .POTW}}săptămânii{{else}}zilei{{end}} ({{.Date.Format `2006-01-02`}}) - {{.Name}}: {{.URL}}\n\nMult succes!"
+		config.WebhookMsg = "{{if .POTW}}<@&1106304624958394368>{{else}}<@&1106147993071140865>{{end}} - Problema {{if .POTW}}săptămânii{{else}}zilei{{end}} ({{.Date.Format `2006-01-02`}}) - {{.Name}}: <{{.URL}}>\n\nMult succes!"
 	}
 	return nil
 }
