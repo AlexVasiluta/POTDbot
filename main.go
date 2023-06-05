@@ -44,7 +44,6 @@ const (
 	webhookMsg = `{{if .POTW}}<@&1106304624958394368>{{else}}<@&1106147993071140865>{{end}} - {{if gt (len .POTDs) 1}}Problemele{{else}}Problema{{end}} {{if .POTW}}săptămânii{{else}}zilei{{end}} ({{.Date.Format "2006-01-02"}}):
 {{range .POTDs}}* {{.Name}} - <{{.URL}}>
 {{end}}
-
 Mult succes!`
 )
 
@@ -494,7 +493,7 @@ func consumePOTDs(day time.Time) {
 	defer configMu.Unlock()
 	toDel := []string{}
 	potds := []*POTD{}
-	potws := []*POTW{}
+	potws := []*POTD{}
 	for _, potd := range config.FuturePOTDs {
 		if eqDates(potd.Date, day) {
 			if potd.POTW {
@@ -518,12 +517,12 @@ func consumePOTDs(day time.Time) {
 			Content: buf.String(),
 		}); err != nil {
 			log.Println("Webhook error:", err)
-			continue
+			return
 		}
 		for _, potd := range potds {
 			log.Printf("Sent POTD " + potd.Name)
+			toDel = append(toDel, potd.Name)
 		}
-		toDel = append(toDel, potds...)
 	}
 	if len(potws) > 0 {
 		var buf bytes.Buffer
@@ -539,12 +538,12 @@ func consumePOTDs(day time.Time) {
 			Content: buf.String(),
 		}); err != nil {
 			log.Println("Webhook error:", err)
-			continue
+			return
 		}
-		for _, potd := range potds {
-			log.Printf("Sent POTW " + potd.Name)
+		for _, potw := range potws {
+			log.Printf("Sent POTW " + potw.Name)
+			toDel = append(toDel, potw.Name)
 		}
-		toDel = append(toDel, potws...)
 	}
 	if len(toDel) == 0 {
 		return
@@ -571,6 +570,7 @@ func potdPoller(ctx context.Context) {
 		case <-ctx.Done():
 			log.Printf("Stopping poller")
 			t.Stop()
+			return
 		case <-t.C:
 			tTime := getDate(time.Now())
 			if time.Now().After(tTime) {
