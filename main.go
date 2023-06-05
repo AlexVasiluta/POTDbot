@@ -36,10 +36,21 @@ type POTD struct {
 type Config struct {
 	WebhookID     string `json:"webhook_url"`
 	WebhookSecret string `json:"secret"`
-	WebhookMsg    string `json:"webhook_msg"`
 
 	FuturePOTDs []*POTD `json:"future_potds"`
 }
+
+const (
+	webhookMsg = `{{if .POTW}}<@&1106304624958394368>{{else}}<@&1106147993071140865>{{end}} - {{if gt (len .POTDs) 1}}Problemele{{else}}Problema{{end}} {{if .POTW}}săptămânii{{else}}zilei{{end}} ({{.Date.Format "2006-01-02"}}):
+{{range .POTDs}}* {{.Name}} - <{{.URL}}>
+{{end}}
+
+Mult succes!`
+)
+
+var (
+	webhookTempl = template.Must(template.New("potd").Parse(webhookMsg))
+)
 
 var configMu sync.RWMutex
 var config Config
@@ -67,14 +78,11 @@ func LoadConfig() error {
 	if err := json.NewDecoder(f).Decode(&config); err != nil {
 		return err
 	}
-	if config.WebhookMsg == "" {
-		config.WebhookMsg = "{{if .POTW}}<@&1106304624958394368>{{else}}<@&1106147993071140865>{{end}} - Problema {{if .POTW}}săptămânii{{else}}zilei{{end}} ({{.Date.Format `2006-01-02`}}) - {{.Name}}: <{{.URL}}>\n\nMult succes!"
-	}
 	return nil
 }
 
 func getDate(t time.Time) time.Time {
-	return time.Date(t.Year(), t.Month(), t.Day(), 7, 0, 0, 0, time.Local) // at 7am local time
+	return time.Date(t.Year(), t.Month(), t.Day(), 7, 0, 0, 0, t.Location()) // at 7am local time
 }
 
 var (
@@ -226,7 +234,7 @@ var (
 				} else if opt.Name == "url" {
 					potd.URL = opt.StringValue()
 				} else if opt.Name == "date" {
-					date, err := time.Parse(time.DateOnly, opt.StringValue())
+					date, err := time.ParseInLocation(time.DateOnly, opt.StringValue(), time.Local)
 					if err != nil {
 						s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 							Type: discordgo.InteractionResponseChannelMessageWithSource,
@@ -237,15 +245,6 @@ var (
 						return
 					}
 					potd.Date = getDate(date) // at 7am local time
-					if time.Now().After(potd.Date) {
-						s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-							Type: discordgo.InteractionResponseChannelMessageWithSource,
-							Data: &discordgo.InteractionResponseData{
-								Content: "ERROR: date must be in the future",
-							},
-						})
-						return
-					}
 				} else if opt.Name == "potw" {
 					potd.POTW = opt.BoolValue()
 				} else {
@@ -300,7 +299,7 @@ var (
 				if opt.Name == "name" {
 					nameToSearch = opt.StringValue()
 				} else if opt.Name == "date" {
-					date, err := time.Parse(time.DateOnly, opt.StringValue())
+					date, err := time.ParseInLocation(time.DateOnly, opt.StringValue(), time.Local)
 					if err != nil {
 						s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 							Type: discordgo.InteractionResponseChannelMessageWithSource,
@@ -392,7 +391,7 @@ var (
 				} else if opt.Name == "url" {
 					config.FuturePOTDs[idx].URL = opt.StringValue()
 				} else if opt.Name == "date" {
-					date, err := time.Parse(time.DateOnly, opt.StringValue())
+					date, err := time.ParseInLocation(time.DateOnly, opt.StringValue(), time.Local)
 					if err != nil {
 						s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 							Type: discordgo.InteractionResponseChannelMessageWithSource,
@@ -423,7 +422,7 @@ var (
 			var tDate time.Time
 			for _, opt := range i.ApplicationCommandData().Options {
 				if opt.Name == "date" {
-					date, err := time.Parse(time.DateOnly, opt.StringValue())
+					date, err := time.ParseInLocation(time.DateOnly, opt.StringValue(), time.Local)
 					if err != nil {
 						s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 							Type: discordgo.InteractionResponseChannelMessageWithSource,
@@ -494,26 +493,58 @@ func consumePOTDs(day time.Time) {
 	configMu.Lock()
 	defer configMu.Unlock()
 	toDel := []string{}
+	potds := []*POTD{}
+	potws := []*POTW{}
 	for _, potd := range config.FuturePOTDs {
 		if eqDates(potd.Date, day) {
-			t, err := template.New("potw").Parse(config.WebhookMsg)
-			if err != nil {
-				log.Println("Template parse error:", err)
-				return
+			if potd.POTW {
+				potws = append(potws, potd)
+			} else {
+				potds = append(potds, potd)
 			}
-			var buf bytes.Buffer
-			if err := t.Execute(&buf, potd); err != nil {
-				log.Println("Template execute error:", err)
-				return
-			}
-			if _, err := s.WebhookExecute(config.WebhookID, config.WebhookSecret, false, &discordgo.WebhookParams{
-				Content: buf.String(),
-			}); err != nil {
-				log.Println("Webhook error:", err)
-				continue
-			}
-			toDel = append(toDel, potd.Name)
 		}
+	}
+	if len(potds) > 0 {
+		var buf bytes.Buffer
+		if err := webhookTempl.Execute(&buf, struct {
+			POTW  bool
+			Date  time.Time
+			POTDs []*POTD
+		}{POTW: false, Date: potds[0].Date, POTDs: potds}); err != nil {
+			log.Println("Template execute error:", err)
+			return
+		}
+		if _, err := s.WebhookExecute(config.WebhookID, config.WebhookSecret, false, &discordgo.WebhookParams{
+			Content: buf.String(),
+		}); err != nil {
+			log.Println("Webhook error:", err)
+			continue
+		}
+		for _, potd := range potds {
+			log.Printf("Sent POTD " + potd.Name)
+		}
+		toDel = append(toDel, potds...)
+	}
+	if len(potws) > 0 {
+		var buf bytes.Buffer
+		if err := webhookTempl.Execute(&buf, struct {
+			POTW  bool
+			Date  time.Time
+			POTDs []*POTD
+		}{POTW: true, Date: potws[0].Date, POTDs: potws}); err != nil {
+			log.Println("Template execute error:", err)
+			return
+		}
+		if _, err := s.WebhookExecute(config.WebhookID, config.WebhookSecret, false, &discordgo.WebhookParams{
+			Content: buf.String(),
+		}); err != nil {
+			log.Println("Webhook error:", err)
+			continue
+		}
+		for _, potd := range potds {
+			log.Printf("Sent POTW " + potd.Name)
+		}
+		toDel = append(toDel, potws...)
 	}
 	if len(toDel) == 0 {
 		return
@@ -538,10 +569,12 @@ func potdPoller(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			log.Printf("Stopping poller")
 			t.Stop()
 		case <-t.C:
-			tTime := time.Now().Truncate(24 * time.Hour).Add(7 * time.Hour) //7am
+			tTime := getDate(time.Now())
 			if time.Now().After(tTime) {
+				//log.Printf("Consuming POTDs")
 				consumePOTDs(tTime)
 			}
 		}
