@@ -19,7 +19,6 @@ import (
 	"slices"
 
 	"github.com/bwmarrin/discordgo"
-	slexp "golang.org/x/exp/slices"
 )
 
 var (
@@ -251,8 +250,8 @@ var (
 				}
 			}
 			config.FuturePOTDs = append(config.FuturePOTDs, potd)
-			slexp.SortStableFunc(config.FuturePOTDs, func(potd1, potd2 *POTD) bool {
-				return potd1.Date.Before(potd2.Date)
+			slices.SortStableFunc(config.FuturePOTDs, func(potd1, potd2 *POTD) int {
+				return potd1.Date.Compare(potd2.Date)
 			})
 			if err := SaveConfig(); err != nil {
 				log.Printf("Couldn't save config: %v", err)
@@ -626,28 +625,11 @@ func main() {
 	defer s.Close()
 
 	log.Println("Adding commands")
-	for _, v := range commands {
-		_, err := s.ApplicationCommandCreate(s.State.User.ID, "", v)
-		if err != nil {
-			log.Panicf("Cannot create '%v' command: %v", v.Name, err)
-		}
+	if _, err := s.ApplicationCommandBulkOverwrite(s.State.User.ID, "", commands); err != nil {
+		log.Panicf("Cannot reset application commands: %v", err)
 	}
 
 	<-ctx.Done()
-
-	log.Println("Getting commands to remove")
-	registeredCommands, err := s.ApplicationCommands(s.State.User.ID, "")
-	if err != nil {
-		log.Fatalf("Could not fetch registered commands: %v", err)
-	}
-
-	for _, v := range registeredCommands {
-		log.Printf("Removing %s", v.Name)
-		err := s.ApplicationCommandDelete(s.State.User.ID, "", v.ID)
-		if err != nil {
-			log.Panicf("Cannot delete '%v' command: %v", v.Name, err)
-		}
-	}
 
 	log.Printf("Shutting down")
 }
